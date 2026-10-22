@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<XMLDocument version="1.0">
+  <task>
+    <!-- Типы потоков: 1 - исходные данные, 2 - обработанный результат -->
+    <flows>
+      <type id="1" price="1" loss="1"/>
+      <type id="2" price="10" loss="1"/>
+    </flows>
+
+    <!-- Обработка: 1 единица входа за 0.004 с => производительность 250 ед/с -->
+    <process>
+      <type id="1" time="0.004">
+        <input><type id="1" size="1"/></input>
+        <output><type id="2" size="1"/></output>
+      </type>
+    </process>
+
+    <!-- Передача: 1 единица за 0.05 с => производительность 20 ед/с -->
+    <transport>
+      <type id="1" time="0.05">
+        <input><type id="1" size="1"/></input>
+        <output><type id="1" size="1"/></output>
+      </type>
+    </transport>
+
+    <!-- Запоминающее устройство принимает оба типа потоков -->
+    <storage>
+      <type id="1">
+        <input>
+          <type id="1"/>
+          <type id="2"/>
+        </input>
+      </type>
+    </storage>
+
+    <!-- Интервал 1: связь с центром у всех четырёх аппаратов -->
+    <struct id="1" time="1431" start_time="0" end_time="1431">
+      <elem id="1" output_2="" process_1="" storage_1="50000"/>
+      <elem id="3" input_1="14310" storage_1="5000"/>
+      <elem id="4" input_1="14310" storage_1="5000"/>
+      <elem id="5" input_1="14310" storage_1="5000"/>
+      <elem id="6" input_1="14310" storage_1="5000"/>
+      <link id1="3" id2="1" direction="forward" transport_1=""/>
+      <link id1="4" id2="1" direction="forward" transport_1=""/>
+      <link id1="5" id2="1" direction="forward" transport_1=""/>
+      <link id1="6" id2="1" direction="forward" transport_1=""/>
+    </struct>
+
+    <!-- Интервал 2: аппарат 3 вне зоны связи -->
+    <struct id="2" time="433" start_time="1431" end_time="1864">
+      <elem id="1" output_2="" process_1="" storage_1="50000"/>
+      <elem id="3" storage_1="5000"/>
+      <elem id="4" input_1="4330" storage_1="5000"/>
+      <elem id="5" input_1="4330" storage_1="5000"/>
+      <elem id="6" input_1="4330" storage_1="5000"/>
+      <link id1="4" id2="1" direction="forward" transport_1=""/>
+      <link id1="5" id2="1" direction="forward" transport_1=""/>
+      <link id1="6" id2="1" direction="forward" transport_1=""/>
+    </struct>
+
+    <!-- Интервал 3: связь только у аппаратов 5 и 6 -->
+    <struct id="3" time="870" start_time="1864" end_time="2734">
+      <elem id="1" output_2="" process_1="" storage_1="50000"/>
+      <elem id="3" storage_1="5000"/>
+      <elem id="4" storage_1="5000"/>
+      <elem id="5" input_1="8700" storage_1="5000"/>
+      <elem id="6" input_1="8700" storage_1="5000"/>
+      <link id1="5" id2="1" direction="forward" transport_1=""/>
+      <link id1="6" id2="1" direction="forward" transport_1=""/>
+    </struct>
+
+    <!-- Интервал 4: короткое окно только у аппарата 6 -->
+    <struct id="4" time="1" start_time="2734" end_time="2735">
+      <elem id="1" output_2="" process_1="" storage_1="50000"/>
+      <elem id="3" storage_1="5000"/>
+      <elem id="4" storage_1="5000"/>
+      <elem id="5" storage_1="5000"/>
+      <elem id="6" input_1="10" storage_1="5000"/>
+      <link id1="6" id2="1" direction="forward" transport_1=""/>
+    </struct>
+
+    <!-- Показатели: доставленный результат со знаком плюс, потери со знаком минус -->
+    <selectors>
+      <selector id="1" sign="1">
+        <resultflow object="*" flow="2" interval="*"/>
+      </selector>
+      <selector id="2" sign="-1">
+        <lost object="*" flow="*" interval="*"/>
+      </selector>
+      <selector id="3" sign="1">
+        <storage object="*" flow="*" tech="*" interval="*"/>
+      </selector>
+    </selectors>
+
+    <criterion sign="MAX">
+      <selector id="1"/>
+      <selector id="2"/>
+    </criterion>
+
+    <constraints>
+      <constraint id="1" sign="&lt;=" value="200000">
+        <selector id="3"/>
+      </constraint>
+    </constraints>
+  </task>
+</XMLDocument>
