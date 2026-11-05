@@ -8,6 +8,7 @@
 
 #include "bpmn.h"
 #include "check.h"
+#include "dw.h"
 #include "lp.h"
 #include "parser.h"
 
@@ -19,11 +20,14 @@ struct Options {
     std::string validator = "pda_validator.py";
     bool skipValidation = false;
     bool quiet = false;
+    bool useDw = false;       // метод Данцига-Вульфа вместо монолитного симплекса
+    bool verboseDw = false;   // печатать ход генерации столбцов
 };
 
 void usage(const char* program) {
     std::cout << "Использование: " << program
               << " <входной.xml> [-o план.bpmn] [--skip-validation] [--quiet]\n"
+              << "               [--method simplex|dw] [--verbose]\n"
               << "               [--validator путь/к/pda_validator.py]\n";
 }
 
@@ -34,6 +38,11 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.output = argv[++i];
         } else if (arg == "--validator" && i + 1 < argc) {
             options.validator = argv[++i];
+        } else if (arg == "--method" && i + 1 < argc) {
+            const std::string method = argv[++i];
+            options.useDw = (method == "dw" || method == "dantzig-wolfe");
+        } else if (arg == "--verbose") {
+            options.verboseDw = true;
         } else if (arg == "--skip-validation") {
             options.skipValidation = true;
         } else if (arg == "--quiet") {
@@ -82,7 +91,20 @@ int main(int argc, char** argv) {
                   << ", технологий обработки: " << task.processes.size()
                   << ", передачи: " << task.transports.size() << "\n";
 
-        const pdaplan::Solution solution = pdaplan::buildAndSolve(task);
+        pdaplan::Solution solution;
+        if (options.useDw) {
+            pdaplan::DwOptions dwOptions;
+            dwOptions.verbose = options.verboseDw;
+            pdaplan::DwStats stats;
+            solution = pdaplan::solveDantzigWolfe(task, dwOptions, stats);
+            std::cout << "Метод: декомпозиция Данцига-Вульфа\n"
+                      << "Блоков: " << stats.blocks << ", связующих ограничений: "
+                      << stats.couplings << ", итераций: " << stats.iterations
+                      << ", сгенерировано столбцов: " << stats.columnsGenerated << "\n";
+        } else {
+            solution = pdaplan::buildAndSolve(task);
+            std::cout << "Метод: монолитный симплекс\n";
+        }
         std::cout << "Статус решателя: " << solution.message << "\n"
                   << "Значение критерия: " << std::fixed << std::setprecision(4)
                   << solution.objective << "\n";

@@ -33,6 +33,9 @@ struct LpResult {
     std::string message;
     double objective = 0.0;
     std::vector<double> x;
+    // Двойственные оценки строк в порядке: сначала неравенства, затем равенства.
+    // Нужны методу Данцига-Вульфа: это цены на связующие ограничения.
+    std::vector<double> duals;
 };
 
 LpResult solveLp(const LpProblem& problem);

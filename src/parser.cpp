@@ -128,7 +128,10 @@ void parseNode(const XMLElement* elem, Interval& interval) {
         } else if (startsWith(name, "process_")) {
             node.processes.push_back(name.substr(8));
         } else if (startsWith(name, "storage_")) {
-            node.storages[name.substr(8)] = num(value, kInfCapacity);
+            // '*' означает "правая часть равна длине интервала": для склада это число
+            // длины, подставленное как лимит объёма.
+            node.storages[name.substr(8)] =
+                value == "*" ? interval.duration : num(value, kInfCapacity);
         } else if (name == "send_capacity" || name == "receive_capacity" ||
                    name == "total_capacity") {
             // '*' означает "равно длительности интервала".

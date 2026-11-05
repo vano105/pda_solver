@@ -1,6 +1,9 @@
 #include "simplex.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 namespace pdaplan {
@@ -16,6 +19,45 @@ struct Tableau {
     std::vector<int> basis;              // базисный столбец каждой строки
     int m = 0;
     int n = 0;
+
+    std::vector<std::vector<double>> a0;  // исходная матрица для рефакторизации
+    std::vector<double> b0;
+
+    // Пересчёт таблицы из исходной матрицы по текущему базису. Плотная таблица за
+    // тысячи пивотов накапливает ошибку округления, и симплекс начинает буксовать
+    // на мнимых улучшениях; рефакторизация возвращает точность.
+    bool refactor() {
+        std::vector<std::vector<double>> savedA = a;
+        std::vector<double> savedB = b;
+        const std::vector<int> wanted = basis;
+
+        a = a0;
+        b = b0;
+        std::vector<bool> usedRow(m, false);
+
+        for (int k = 0; k < m; ++k) {
+            const int column = wanted[k];
+            int bestRow = -1;
+            double bestValue = 1e-9;
+            for (int i = 0; i < m; ++i) {
+                if (usedRow[i]) continue;
+                const double value = std::fabs(a[i][column]);
+                if (value > bestValue) {
+                    bestValue = value;
+                    bestRow = i;
+                }
+            }
+            if (bestRow < 0) {  // базис вырожден — оставляем прежнюю таблицу
+                a = std::move(savedA);
+                b = std::move(savedB);
+                basis = wanted;
+                return false;
+            }
+            pivot(bestRow, column);
+            usedRow[bestRow] = true;
+        }
+        return true;
+    }
 
     void pivot(int row, int col) {
         const double factor = a[row][col];
@@ -37,21 +79,33 @@ struct Tableau {
 // Возвращает false, если задача неограничена.
 bool runPhase(Tableau& t, const std::vector<double>& cost,
               const std::vector<bool>& allowed, bool& hitLimit) {
-    const long long limit = 200LL * (t.m + t.n) + 10000;
+    const long long limit = 2000LL * (t.m + t.n) + 100000;
     long long iteration = 0;
+
+    // Допуск на приведённую стоимость масштабируется по целевой функции: при
+    // коэффициентах порядка 10^5 абсолютный допуск 1e-9 тонет в шуме округления,
+    // и симплекс бесконечно пивотирует на мнимых улучшениях.
+    double costScale = 1.0;
+    for (double value : cost) costScale = std::max(costScale, std::fabs(value));
+    const double dualEps = 1e-9 * costScale;
+    long long degenerate = 0;  // подряд идущие шаги с нулевым сдвигом
     hitLimit = false;
 
     while (true) {
         if (++iteration > limit) {
             hitLimit = true;
+            if (getenv("PDA_DEBUG"))
+                fprintf(stderr, "[simplex] лимит: m=%d n=%d итераций=%lld\n", t.m, t.n, iteration);
             return true;
         }
-        // Правило Блэнда после половины лимита — страховка от зацикливания.
-        const bool bland = iteration > limit / 2;
+        // Правило Блэнда включается, как только появляется серия вырожденных шагов:
+        // главная задача метода Данцига-Вульфа вырождена почти вся, и без этого
+        // симплекс буксует на месте.
+        const bool bland = getenv("PDA_BLAND") ? true : degenerate > t.m;
 
         // Приведённые стоимости: r_j = c_j - sum_i cB_i * a[i][j].
         int entering = -1;
-        double best = -kEps;
+        double best = -dualEps;
         for (int j = 0; j < t.n; ++j) {
             if (!allowed[j]) continue;
             double reduced = cost[j];
@@ -74,16 +128,31 @@ bool runPhase(Tableau& t, const std::vector<double>& cost,
             const double coeff = t.a[i][entering];
             if (coeff <= kPivotEps) continue;
             const double ratio = t.b[i] / coeff;
-            if (ratio < bestRatio - kEps ||
-                (std::fabs(ratio - bestRatio) < kEps && leaving >= 0 &&
-                 t.basis[i] < t.basis[leaving])) {
+            if (leaving < 0) {
                 bestRatio = ratio;
                 leaving = i;
+                continue;
+            }
+            // Допуск относительный: при больших числах абсолютный тонет в шуме округления.
+            const double tol = kEps * std::max(1.0, std::fabs(bestRatio));
+            if (ratio < bestRatio - tol) {
+                bestRatio = ratio;
+                leaving = i;
+            } else if (ratio <= bestRatio + tol && t.basis[i] < t.basis[leaving]) {
+                bestRatio = std::min(bestRatio, ratio);
+                leaving = i;  // правило Блэнда при равных отношениях
             }
         }
-        if (leaving < 0) return false;  // неограниченная задача
+        if (leaving < 0) {
+            if (getenv("PDA_DEBUG"))
+                fprintf(stderr, "[simplex] неограничено: входит столбец %d, m=%d n=%d\n",
+                        entering, t.m, t.n);
+            return false;  // неограниченная задача
+        }
 
+        degenerate = bestRatio <= kEps ? degenerate + 1 : 0;
         t.pivot(leaving, entering);
+        if (iteration % 200 == 0) t.refactor();
     }
 }
 
@@ -110,6 +179,10 @@ LpResult solveLp(const LpProblem& problem) {
     std::vector<bool> isArtificial(n, false);
     int artificialCount = 0;
 
+    // Для двойственных оценок: единичный столбец каждой строки и признак смены знака.
+    std::vector<int> identityColumn(m, -1);
+    std::vector<bool> flipped(m, false);
+
     auto fillRow = [&](int row, const LpRow& source, int slackColumn) {
         for (const auto& [var, coeff] : source.coeffs) t.a[row][var] = coeff;
         t.b[row] = source.rhs;
@@ -119,21 +192,27 @@ LpResult solveLp(const LpProblem& problem) {
         if (t.b[row] < 0.0) {
             for (double& value : t.a[row]) value = -value;
             t.b[row] = -t.b[row];
+            flipped[row] = true;
         }
 
         // Если слэк остался с коэффициентом +1, он и становится базисом.
         if (slackColumn >= 0 && t.a[row][slackColumn] > 0.0) {
             t.basis[row] = slackColumn;
+            identityColumn[row] = slackColumn;
             return;
         }
         const int artificial = artificialOffset + artificialCount++;
         t.a[row][artificial] = 1.0;
         isArtificial[artificial] = true;
         t.basis[row] = artificial;
+        identityColumn[row] = artificial;
     };
 
     for (int i = 0; i < numUb; ++i) fillRow(i, problem.inequalities[i], slackOffset + i);
     for (int i = 0; i < numEq; ++i) fillRow(numUb + i, problem.equalities[i], -1);
+
+    t.a0 = t.a;
+    t.b0 = t.b;
 
     // ---- Фаза 1: минимизируем сумму искусственных переменных ----
     std::vector<bool> allowed(n, true);
@@ -145,14 +224,14 @@ LpResult solveLp(const LpProblem& problem) {
             if (isArtificial[j]) phase1Cost[j] = 1.0;
 
         if (!runPhase(t, phase1Cost, allowed, hitLimit)) {
-            return {LpStatus::Unbounded, "Фаза 1 неограничена (некорректная модель)", 0.0, {}};
+            return {LpStatus::Unbounded, "Фаза 1 неограничена (некорректная модель)", 0.0, {}, {}};
         }
 
         double residual = 0.0;
         for (int i = 0; i < m; ++i)
             if (isArtificial[t.basis[i]]) residual += t.b[i];
         if (residual > 1e-6) {
-            return {LpStatus::Infeasible, "Ограничения несовместны", 0.0, {}};
+            return {LpStatus::Infeasible, "Ограничения несовместны", 0.0, {}, {}};
         }
 
         // Выводим искусственные переменные из базиса, где это возможно.
@@ -174,7 +253,7 @@ LpResult solveLp(const LpProblem& problem) {
         cost[j] = problem.objective[j];
 
     if (!runPhase(t, cost, allowed, hitLimit)) {
-        return {LpStatus::Unbounded, "Целевая функция не ограничена", 0.0, {}};
+        return {LpStatus::Unbounded, "Целевая функция не ограничена", 0.0, {}, {}};
     }
 
     std::vector<double> x(numVars, 0.0);
@@ -186,10 +265,24 @@ LpResult solveLp(const LpProblem& problem) {
     double objective = 0.0;
     for (int j = 0; j < numVars; ++j) objective += cost[j] * x[j];
 
-    if (hitLimit) {
-        return {LpStatus::IterationLimit, "Достигнут лимит итераций", objective, x};
+    // Двойственная оценка строки i: y_i = -r_j, где j — единичный столбец этой строки,
+    // r_j — его приведённая стоимость при целевой функции второй фазы.
+    std::vector<double> duals(m, 0.0);
+    for (int i = 0; i < m; ++i) {
+        const int column = identityColumn[i];
+        if (column < 0) continue;
+        double reduced = cost[column];
+        for (int row = 0; row < m; ++row) {
+            const double coeff = t.a[row][column];
+            if (coeff != 0.0) reduced -= cost[t.basis[row]] * coeff;
+        }
+        duals[i] = flipped[i] ? reduced : -reduced;
     }
-    return {LpStatus::Optimal, "Оптимум найден", objective, x};
+
+    if (hitLimit) {
+        return {LpStatus::IterationLimit, "Достигнут лимит итераций", objective, x, duals};
+    }
+    return {LpStatus::Optimal, "Оптимум найден", objective, x, duals};
 }
 
 }  // namespace pdaplan

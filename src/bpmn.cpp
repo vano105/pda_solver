@@ -36,7 +36,6 @@ struct Bounds {
     double x = 0.0, y = 0.0, w = 0.0, h = 0.0;
 };
 
-// Счётчик идентификаторов вида pda_<prefix>_<n>.
 class IdGenerator {
 public:
     std::string next(const std::string& prefix) {
@@ -144,11 +143,10 @@ void writeBpmn(std::vector<Chain>& chains, const std::string& path) {
     process->SetAttribute("isExecutable", "false");
     definitions->InsertEndChild(process);
 
-    std::map<std::string, std::vector<std::string>> resources;  // объект -> параметры performance
+    std::map<std::string, std::vector<std::string>> resources;
     std::map<std::string, Bounds> shapes;
     std::vector<std::pair<std::string, std::string>> flows;
 
-    // Добавление одной задачи со всеми расширениями.
     auto addTask = [&](const std::string& taskId, const std::string& name,
                        const std::string& resource, double stream, double duration,
                        std::optional<double> performance, bool hasWindow, double windowStart,
@@ -278,7 +276,6 @@ void writeBpmn(std::vector<Chain>& chains, const std::string& path) {
         flowIds.emplace_back(flowId, source, target);
     }
 
-    // Раскладка схемы.
     XMLElement* diagram = doc.NewElement("bpmndi:BPMNDiagram");
     diagram->SetAttribute("id", "Diagram_1");
     definitions->InsertEndChild(diagram);
@@ -323,7 +320,6 @@ void writeBpmn(std::vector<Chain>& chains, const std::string& path) {
         edge->InsertEndChild(second);
     }
 
-    // Ресурсы-исполнители.
     for (const auto& [resourceId, params] : resources) {
         XMLElement* resource = doc.NewElement("resource");
         resource->SetAttribute("id", ("RS_" + resourceId).c_str());

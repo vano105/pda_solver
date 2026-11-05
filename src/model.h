@@ -1,5 +1,3 @@
-// Доменная модель задачи планирования информационного взаимодействия.
-// Соответствует входному XML формата PDA (тому, что проверяет pda_validator.py).
 #pragma once
 
 #include <limits>
@@ -10,7 +8,6 @@
 
 namespace pdaplan {
 
-// Технология обработки: за time секунд перерабатывает inSize единиц входного потока.
 struct ProcessTech {
     std::string id;
     double time = 1.0;
@@ -19,15 +16,11 @@ struct ProcessTech {
     std::string outFlow;
     double outSize = 1.0;
 
-    // Производительность: единиц входного объёма в секунду.
     double performance() const { return time > 0 ? inSize / time : 0.0; }
-    // Сколько единиц выхода даёт одна единица входа.
     double yieldRatio() const { return outSize / inSize; }
-    // Секунд на единицу входного объёма.
     double timePerUnit() const { return time / inSize; }
 };
 
-// Технология передачи одного типа потока.
 struct TransportTech {
     std::string id;
     double time = 1.0;
@@ -40,16 +33,15 @@ struct TransportTech {
 
 struct StorageTech {
     std::string id;
-    std::vector<std::string> flows;  // типы потоков, которые ЗУ принимает
+    std::vector<std::string> flows;
 };
 
-// Объект (исполнитель) на конкретном интервале.
 struct Node {
     std::string id;
-    std::map<std::string, double> inputs;    // input_<flow>   -> объём поступления
-    std::vector<std::string> outputs;        // output_<flow>  -> узел-потребитель
-    std::vector<std::string> processes;      // process_<tech>
-    std::map<std::string, double> storages;  // storage_<tech> -> ёмкость
+    std::map<std::string, double> inputs;
+    std::vector<std::string> outputs;
+    std::vector<std::string> processes;
+    std::map<std::string, double> storages;
     std::optional<double> sendCapacity;
     std::optional<double> receiveCapacity;
     std::optional<double> totalCapacity;
@@ -59,9 +51,8 @@ struct Link {
     std::string id1;
     std::string id2;
     std::string direction = "both";
-    std::vector<std::string> transports;  // transport_<tech>
+    std::vector<std::string> transports;
 
-    // Разрешённые направления передачи: пары (отправитель, получатель).
     std::vector<std::pair<std::string, std::string>> orderedPairs() const {
         if (direction == "forward") return {{id1, id2}};
         if (direction == "backward") return {{id2, id1}};
@@ -70,7 +61,6 @@ struct Link {
     }
 };
 
-// Интервал постоянства структуры (<struct>).
 struct Interval {
     std::string id;
     double duration = 0.0;
@@ -86,7 +76,6 @@ struct Interval {
     }
 };
 
-// Элемент-переменная внутри селектора: тип и индексы ("*" — все значения).
 struct VarRef {
     std::string kind;
     std::map<std::string, std::string> idx;
@@ -116,7 +105,6 @@ struct Criterion {
     std::vector<std::string> selectorIds;
 };
 
-// Полное описание задачи.
 struct Task {
     std::vector<std::string> flows;
     std::map<std::string, ProcessTech> processes;
@@ -127,7 +115,6 @@ struct Task {
     Criterion criterion;
     std::vector<Constraint> constraints;
 
-    // Абсолютные границы интервалов: из start_time/end_time либо накоплением длительностей.
     std::map<std::string, std::pair<double, double>> absoluteTimes() const {
         std::map<std::string, std::pair<double, double>> result;
         double cursor = 0.0;

@@ -130,7 +130,8 @@ std::vector<Term> expandVar(const Task& task, const VarRef& ref) {
                         if (matches(ref.at("flow"), tech.outFlow))
                             out.push_back({false, key, tech.yieldRatio()});
                     } else {
-                        out.push_back({false, key, 1.0});
+                        // process и process_all — это ДЛИТЕЛЬНОСТИ обработки, а не объёмы.
+                        out.push_back({false, key, tech.timePerUnit()});
                     }
                 }
 

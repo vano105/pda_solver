@@ -8,6 +8,7 @@ add_executable(pda_solver
     src/main.cpp
     src/parser.cpp
     src/lp.cpp
+    src/dw.cpp
     src/simplex.cpp
     src/check.cpp
     src/bpmn.cpp
