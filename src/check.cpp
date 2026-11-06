@@ -121,4 +121,41 @@ std::vector<std::string> checkSolution(const Task& task, const Solution& solutio
     return problems;
 }
 
+BalanceSummary summarize(const Task& task, const Solution& solution) {
+    BalanceSummary summary;
+    if (task.intervals.empty()) return summary;
+    const std::string& lastInterval = task.intervals.back().id;
+
+    for (const Interval& interval : task.intervals) {
+        for (const Node& node : interval.nodes) {
+            for (const auto& [flow, volume] : node.inputs) summary.input += volume;
+
+            for (const std::string& flow : node.outputs)
+                summary.delivered += solution.value(resultVar(interval.id, node.id, flow));
+            for (const std::string& flow : task.flows)
+                summary.lost += solution.value(lostVar(interval.id, node.id, flow));
+
+            for (const std::string& techId : node.processes) {
+                auto pt = task.processes.find(techId);
+                if (pt == task.processes.end()) continue;
+                const double amount = solution.value(processVar(interval.id, node.id, techId));
+                summary.converted += amount * (1.0 - pt->second.yieldRatio());
+            }
+
+            // В памяти считаем только остаток на конец горизонта: хранение более ранних
+            // интервалов уже учтено дальше по цепочке.
+            if (interval.id != lastInterval) continue;
+            for (const auto& [techId, capacity] : node.storages) {
+                (void)capacity;
+                auto st = task.storages.find(techId);
+                if (st == task.storages.end()) continue;
+                for (const std::string& flow : st->second.flows)
+                    summary.storedAtEnd +=
+                        solution.value(storageVar(interval.id, node.id, flow, techId));
+            }
+        }
+    }
+    return summary;
+}
+
 }  // namespace pdaplan

@@ -1,6 +1,8 @@
 // Точка входа: XML задачи -> проверка валидатором -> решение ЛП -> план в BPMN.
 //
 //   ./pda_solver examples/sample_task.xml -o plan.bpmn
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
@@ -119,6 +121,28 @@ int main(int argc, char** argv) {
             for (const auto& [key, value] : solution.nonzero())
                 std::cout << "  " << key.str() << " = " << value << "\n";
         }
+
+        const pdaplan::BalanceSummary balance = pdaplan::summarize(task, solution);
+        auto share = [&](double value) {
+            return balance.input > 0 ? 100.0 * value / balance.input : 0.0;
+        };
+        std::cout << "\nБаланс данных:\n"
+                  << "  поступило извне        " << std::setw(12) << balance.input << "\n"
+                  << "  доставлено потребителю " << std::setw(12) << balance.delivered
+                  << "  (" << std::setprecision(1) << share(balance.delivered) << " %)\n"
+                  << std::setprecision(4)
+                  << "  осталось в ЗУ          " << std::setw(12) << balance.storedAtEnd
+                  << "  (" << std::setprecision(1) << share(balance.storedAtEnd) << " %)\n"
+                  << std::setprecision(4)
+                  << "  потеряно               " << std::setw(12) << balance.lost
+                  << "  (" << std::setprecision(1) << share(balance.lost) << " %)\n"
+                  << std::setprecision(4);
+        if (std::fabs(balance.converted) > 1e-9)
+            std::cout << "  изменение при обработке" << std::setw(12) << balance.converted
+                      << "  (" << std::setprecision(1) << share(balance.converted) << " %)\n"
+                      << std::setprecision(4);
+        if (std::fabs(balance.residual()) > 1e-6 * std::max(1.0, balance.input))
+            std::cout << "  ВНИМАНИЕ: расхождение " << balance.residual() << "\n";
 
         const auto problems = pdaplan::checkSolution(task, solution);
         if (problems.empty()) {

@@ -22,3 +22,16 @@ if(MSVC)
 else()
     target_compile_options(pda_solver PRIVATE -Wall -Wextra)
 endif()
+
+# Тесты: cmake --build build --target pda_tests && ./build/pda_tests
+add_executable(pda_tests EXCLUDE_FROM_ALL
+    tests/test_main.cpp
+    src/parser.cpp
+    src/lp.cpp
+    src/dw.cpp
+    src/simplex.cpp
+    src/check.cpp
+    src/bpmn.cpp
+    third_party/tinyxml2.cpp
+)
+target_include_directories(pda_tests PRIVATE src third_party)

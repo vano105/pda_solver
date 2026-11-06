@@ -1,6 +1,8 @@
 #include "lp.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <functional>
 
@@ -358,6 +360,13 @@ Solution buildAndSolve(const Task& task) {
     problem.objective.assign(problem.numVars, 0.0);
     for (const auto& [column, coeff] : objectiveRow)
         problem.objective[column] = maximize ? -coeff : coeff;
+
+    if (std::getenv("PDA_SIZES"))
+        std::fprintf(stderr,
+                     "[монолит] переменных %d, ограничений %zu "
+                     "(равенств %zu, неравенств %zu)\n",
+                     problem.numVars, problem.equalities.size() + problem.inequalities.size(),
+                     problem.equalities.size(), problem.inequalities.size());
 
     const LpResult result = solveLp(problem);
 
