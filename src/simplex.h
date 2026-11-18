@@ -24,6 +24,12 @@ struct LpProblem {
     std::vector<double> objective;  // минимизируемый вектор c
     std::vector<LpRow> equalities;
     std::vector<LpRow> inequalities;  // вида <= rhs
+
+    // Необязательный стартовый базис: для каждой строки номер столбца либо -1,
+    // если выбор оставлен решателю. Порядок строк: сначала неравенства, затем
+    // равенства. Если заданный базис допустим, первая фаза не выполняется —
+    // это снимает вырожденный поиск допустимой точки там, где она уже известна.
+    std::vector<int> initialBasis;
 };
 
 enum class LpStatus { Optimal, Infeasible, Unbounded, IterationLimit };

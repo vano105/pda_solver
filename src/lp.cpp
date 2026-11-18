@@ -258,18 +258,37 @@ void buildStructure(const Task& task, Builder& builder) {
             builder.addEq(row, rhs);
         }
 
+        // Пропускная способность канала: суммарная длительность передачи по нему
+        // (во все стороны и всеми технологиями) не больше длительности интервала.
+        for (const Link& link : interval.links) {
+            std::map<int, double> linkRow;
+            for (const auto& [sender, receiver] : link.orderedPairs()) {
+                if (!interval.findNode(sender) || !interval.findNode(receiver)) continue;
+                for (const std::string& techId : link.transports) {
+                    auto tt = task.transports.find(techId);
+                    if (tt == task.transports.end()) continue;
+                    linkRow[builder.var(transportVar(k, sender, receiver, techId))] =
+                        tt->second.timePerUnit();
+                }
+            }
+            builder.addUb(linkRow, interval.duration);
+        }
+
         // Лимиты времени на интервале.
         for (const Node& node : interval.nodes) {
             const double procLimit = node.totalCapacity.value_or(interval.duration);
-            const double sendLimit = node.sendCapacity.value_or(interval.duration);
-            const double recvLimit = node.receiveCapacity.value_or(interval.duration);
 
             if (auto it = procTime.find(node.id); it != procTime.end())
                 builder.addUb(it->second, procLimit);
-            if (auto it = sendTime.find(node.id); it != sendTime.end())
-                builder.addUb(it->second, sendLimit);
-            if (auto it = recvTime.find(node.id); it != recvTime.end())
-                builder.addUb(it->second, recvLimit);
+            // Узловые лимиты отправки и приёма накладываются только если во входном
+            // файле заданы send_capacity / receive_capacity. Без них пропускная
+            // способность ограничивается каналами, а не объектом целиком.
+            if (node.sendCapacity)
+                if (auto it = sendTime.find(node.id); it != sendTime.end())
+                    builder.addUb(it->second, *node.sendCapacity);
+            if (node.receiveCapacity)
+                if (auto it = recvTime.find(node.id); it != recvTime.end())
+                    builder.addUb(it->second, *node.receiveCapacity);
         }
 
         carried = std::move(nextCarried);

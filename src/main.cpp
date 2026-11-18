@@ -23,13 +23,14 @@ struct Options {
     bool skipValidation = false;
     bool quiet = false;
     bool useDw = false;       // метод Данцига-Вульфа вместо монолитного симплекса
+    bool dwByInterval = false;// разбиение по интервалам вместо разбиения по объектам
     bool verboseDw = false;   // печатать ход генерации столбцов
 };
 
 void usage(const char* program) {
     std::cout << "Использование: " << program
               << " <входной.xml> [-o план.bpmn] [--skip-validation] [--quiet]\n"
-              << "               [--method simplex|dw] [--verbose]\n"
+              << "               [--method simplex|dw|dwi] [--verbose]\n"
               << "               [--validator путь/к/pda_validator.py]\n";
 }
 
@@ -42,7 +43,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.validator = argv[++i];
         } else if (arg == "--method" && i + 1 < argc) {
             const std::string method = argv[++i];
-            options.useDw = (method == "dw" || method == "dantzig-wolfe");
+            options.useDw = (method == "dw" || method == "dwi" || method == "dantzig-wolfe");
+            options.dwByInterval = (method == "dwi");
         } else if (arg == "--verbose") {
             options.verboseDw = true;
         } else if (arg == "--skip-validation") {
@@ -97,9 +99,12 @@ int main(int argc, char** argv) {
         if (options.useDw) {
             pdaplan::DwOptions dwOptions;
             dwOptions.verbose = options.verboseDw;
+            dwOptions.byInterval = options.dwByInterval;
             pdaplan::DwStats stats;
             solution = pdaplan::solveDantzigWolfe(task, dwOptions, stats);
-            std::cout << "Метод: декомпозиция Данцига-Вульфа\n"
+            std::cout << "Метод: декомпозиция Данцига-Вульфа ("
+                      << (options.dwByInterval ? "блоки — интервалы" : "блоки — объекты")
+                      << ")\n"
                       << "Блоков: " << stats.blocks << ", связующих ограничений: "
                       << stats.couplings << ", итераций: " << stats.iterations
                       << ", сгенерировано столбцов: " << stats.columnsGenerated << "\n";
@@ -111,7 +116,11 @@ int main(int argc, char** argv) {
                   << "Значение критерия: " << std::fixed << std::setprecision(4)
                   << solution.objective << "\n";
 
-        if (solution.status != pdaplan::LpStatus::Optimal) {
+        if (solution.status == pdaplan::LpStatus::IterationLimit && !solution.values.empty()) {
+            // План есть и он допустим, не доказана только его оптимальность:
+            // выводим его как обычно, но с предупреждением.
+            std::cout << "ВНИМАНИЕ: оптимальность не доказана, план может быть хуже лучшего.\n";
+        } else if (solution.status != pdaplan::LpStatus::Optimal) {
             std::cout << "Оптимальное решение не получено.\n";
             return 2;
         }

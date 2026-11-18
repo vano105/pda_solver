@@ -97,22 +97,44 @@ std::vector<std::string> checkSolution(const Task& task, const Solution& solutio
                 }
             }
 
+            // Лимиты отправки и приёма проверяются только если заданы во входном файле.
             const struct {
                 const char* name;
                 double spent;
                 double limit;
+                bool active;
             } limits[] = {
-                {"обработка", procTime[node.id], node.totalCapacity.value_or(interval.duration)},
-                {"отправка", sendTime[node.id], node.sendCapacity.value_or(interval.duration)},
-                {"приём", recvTime[node.id], node.receiveCapacity.value_or(interval.duration)},
+                {"обработка", procTime[node.id],
+                 node.totalCapacity.value_or(interval.duration), true},
+                {"отправка", sendTime[node.id], node.sendCapacity.value_or(0.0),
+                 node.sendCapacity.has_value()},
+                {"приём", recvTime[node.id], node.receiveCapacity.value_or(0.0),
+                 node.receiveCapacity.has_value()},
             };
             for (const auto& item : limits) {
-                if (item.spent > item.limit + kTol) {
+                if (item.active && item.spent > item.limit + kTol) {
                     problems.push_back("интервал " + k + ", объект " + node.id + ": " + item.name +
                                        " занимает " + fmt(item.spent) + " с при лимите " +
                                        fmt(item.limit) + " с");
                 }
             }
+        }
+
+        // Пропускная способность каналов.
+        for (const Link& link : interval.links) {
+            double spent = 0.0;
+            for (const auto& [sender, receiver] : link.orderedPairs()) {
+                for (const std::string& techId : link.transports) {
+                    auto tt = task.transports.find(techId);
+                    if (tt == task.transports.end()) continue;
+                    spent += solution.value(transportVar(k, sender, receiver, techId)) *
+                             tt->second.timePerUnit();
+                }
+            }
+            if (spent > interval.duration + kTol)
+                problems.push_back("интервал " + k + ", канал " + link.id1 + "-" + link.id2 +
+                                   ": передача занимает " + fmt(spent) + " с при длительности " +
+                                   fmt(interval.duration) + " с");
         }
 
         stored = std::move(nextStored);

@@ -4,156 +4,270 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <limits>
+#include <vector>
+
+// Ревизованный симплекс-метод с разреженным хранением столбцов.
+//
+// Матрица ограничений разрежена: в строке баланса участвуют лишь несколько величин,
+// а остальные тысячи переменных входят с нулевым коэффициентом — на реальных данных
+// заполнено около 0,1 % ячеек. Поэтому таблица целиком не хранится: столбцы лежат
+// списками ненулевых элементов, а вместо таблицы ведётся обратная матрица базиса.
+//
+// Стоимость шага: O(m²) на пересчёт обратной матрицы и O(ненулевых) на оценку
+// столбцов — вместо O(m · n) на пересчёт всей таблицы в плотной реализации.
 
 namespace pdaplan {
 namespace {
 
-constexpr double kEps = 1e-9;
+constexpr double kZero = 1e-12;
 constexpr double kPivotEps = 1e-7;
+constexpr double kFeasEps = 1e-7;
 
-// Симплекс-таблица: строки ограничений в канонической форме A x = b, x >= 0.
-struct Tableau {
-    std::vector<std::vector<double>> a;  // m x n
-    std::vector<double> b;               // m
-    std::vector<int> basis;              // базисный столбец каждой строки
-    int m = 0;
-    int n = 0;
+// Столбец матрицы: только ненулевые элементы.
+struct Column {
+    std::vector<int> rows;
+    std::vector<double> values;
 
-    std::vector<std::vector<double>> a0;  // исходная матрица для рефакторизации
-    std::vector<double> b0;
+    void add(int row, double value) {
+        rows.push_back(row);
+        values.push_back(value);
+    }
+    size_t size() const { return rows.size(); }
+};
 
-    // Пересчёт таблицы из исходной матрицы по текущему базису. Плотная таблица за
-    // тысячи пивотов накапливает ошибку округления, и симплекс начинает буксовать
-    // на мнимых улучшениях; рефакторизация возвращает точность.
-    bool refactor() {
-        std::vector<std::vector<double>> savedA = a;
-        std::vector<double> savedB = b;
-        const std::vector<int> wanted = basis;
+// Базис: обратная матрица B⁻¹ и номера базисных столбцов.
+class Basis {
+public:
+    Basis(int m, std::vector<int> columns) : m_(m), columns_(std::move(columns)) {
+        inverse_.assign(static_cast<size_t>(m) * m, 0.0);
+        for (int i = 0; i < m; ++i) inverse_[index(i, i)] = 1.0;
+    }
 
-        a = a0;
-        b = b0;
-        std::vector<bool> usedRow(m, false);
+    int column(int row) const { return columns_[row]; }
+    const std::vector<int>& columnsView() const { return columns_; }
 
-        for (int k = 0; k < m; ++k) {
-            const int column = wanted[k];
-            int bestRow = -1;
-            double bestValue = 1e-9;
-            for (int i = 0; i < m; ++i) {
-                if (usedRow[i]) continue;
-                const double value = std::fabs(a[i][column]);
-                if (value > bestValue) {
-                    bestValue = value;
-                    bestRow = i;
+    // y = c_B · B⁻¹ — двойственные оценки строк.
+    std::vector<double> prices(const std::vector<double>& cost) const {
+        std::vector<double> y(m_, 0.0);
+        for (int row = 0; row < m_; ++row) {
+            const double weight = cost[columns_[row]];
+            if (std::fabs(weight) < kZero) continue;
+            const double* line = &inverse_[index(row, 0)];
+            for (int j = 0; j < m_; ++j) y[j] += weight * line[j];
+        }
+        return y;
+    }
+
+    // d = B⁻¹ · a — как изменятся базисные переменные при вводе столбца a.
+    std::vector<double> direction(const Column& a) const {
+        std::vector<double> d(m_, 0.0);
+        for (size_t k = 0; k < a.size(); ++k) {
+            const int column = a.rows[k];
+            const double value = a.values[k];
+            if (std::fabs(value) < kZero) continue;
+            for (int row = 0; row < m_; ++row) d[row] += value * inverse_[index(row, column)];
+        }
+        return d;
+    }
+
+    // Замена базисного столбца строки pivot на entering.
+    void replace(int pivot, int entering, const std::vector<double>& d,
+                 std::vector<double>& values) {
+        const double lead = d[pivot];
+        double* pivotLine = &inverse_[index(pivot, 0)];
+        for (int j = 0; j < m_; ++j) pivotLine[j] /= lead;
+        values[pivot] /= lead;
+
+        for (int row = 0; row < m_; ++row) {
+            if (row == pivot) continue;
+            const double factor = d[row];
+            if (std::fabs(factor) < kZero) continue;
+            double* line = &inverse_[index(row, 0)];
+            for (int j = 0; j < m_; ++j) line[j] -= factor * pivotLine[j];
+            values[row] -= factor * values[pivot];
+        }
+        columns_[pivot] = entering;
+    }
+
+    // Пересборка обратной матрицы из исходных столбцов базиса. Произведение
+    // элементарных преобразований накапливает ошибку округления, из-за чего на
+    // вырожденных задачах метод начинает буксовать на мнимых улучшениях.
+    bool refactor(const std::vector<Column>& columns) {
+        std::vector<double> work(static_cast<size_t>(m_) * 2 * m_, 0.0);
+        const int width = 2 * m_;
+        auto at = [&](int row, int column) -> double& {
+            return work[static_cast<size_t>(row) * width + column];
+        };
+
+        for (int column = 0; column < m_; ++column) {
+            const Column& source = columns[columns_[column]];
+            for (size_t k = 0; k < source.size(); ++k)
+                at(source.rows[k], column) = source.values[k];
+        }
+        for (int row = 0; row < m_; ++row) at(row, m_ + row) = 1.0;
+
+        for (int column = 0; column < m_; ++column) {
+            int pivot = -1;
+            double best = 1e-10;
+            for (int row = column; row < m_; ++row) {
+                const double value = std::fabs(at(row, column));
+                if (value > best) {
+                    best = value;
+                    pivot = row;
                 }
             }
-            if (bestRow < 0) {  // базис вырожден — оставляем прежнюю таблицу
-                a = std::move(savedA);
-                b = std::move(savedB);
-                basis = wanted;
-                return false;
+            if (pivot < 0) return false;  // базис вырожден, оставляем прежнюю матрицу
+
+            if (pivot != column)
+                for (int j = 0; j < width; ++j) std::swap(at(column, j), at(pivot, j));
+
+            const double lead = at(column, column);
+            for (int j = 0; j < width; ++j) at(column, j) /= lead;
+
+            for (int row = 0; row < m_; ++row) {
+                if (row == column) continue;
+                const double factor = at(row, column);
+                if (std::fabs(factor) < kZero) continue;
+                for (int j = 0; j < width; ++j) at(row, j) -= factor * at(column, j);
             }
-            pivot(bestRow, column);
-            usedRow[bestRow] = true;
         }
+
+        for (int row = 0; row < m_; ++row)
+            for (int j = 0; j < m_; ++j) inverse_[index(row, j)] = at(row, m_ + j);
         return true;
     }
 
-    void pivot(int row, int col) {
-        const double factor = a[row][col];
-        for (double& value : a[row]) value /= factor;
-        b[row] /= factor;
-
-        for (int i = 0; i < m; ++i) {
-            if (i == row) continue;
-            const double coeff = a[i][col];
-            if (std::fabs(coeff) < kEps) continue;
-            for (int j = 0; j < n; ++j) a[i][j] -= coeff * a[row][j];
-            b[i] -= coeff * b[row];
+    // Значения базисных переменных, пересчитанные из исходной правой части.
+    std::vector<double> solve(const std::vector<double>& rhs) const {
+        std::vector<double> x(m_, 0.0);
+        for (int row = 0; row < m_; ++row) {
+            const double* line = &inverse_[index(row, 0)];
+            double sum = 0.0;
+            for (int j = 0; j < m_; ++j) sum += line[j] * rhs[j];
+            x[row] = sum;
         }
-        basis[row] = col;
+        return x;
     }
+
+private:
+    size_t index(int row, int column) const { return static_cast<size_t>(row) * m_ + column; }
+
+    int m_;
+    std::vector<int> columns_;
+    std::vector<double> inverse_;
 };
 
-// Одна фаза симплекса. allowed — какие столбцы разрешено вводить в базис.
-// Возвращает false, если задача неограничена.
-bool runPhase(Tableau& t, const std::vector<double>& cost,
-              const std::vector<bool>& allowed, bool& hitLimit) {
-    const long long limit = 2000LL * (t.m + t.n) + 100000;
-    long long iteration = 0;
+struct Phase {
+    bool optimal = false;
+    bool unbounded = false;
+    bool limit = false;
+};
 
-    // Допуск на приведённую стоимость масштабируется по целевой функции: при
-    // коэффициентах порядка 10^5 абсолютный допуск 1e-9 тонет в шуме округления,
-    // и симплекс бесконечно пивотирует на мнимых улучшениях.
+// Одна фаза метода. allowed — какие столбцы разрешено вводить в базис.
+Phase runPhase(const std::vector<Column>& columns, const std::vector<double>& rhs,
+               const std::vector<double>& cost, const std::vector<bool>& allowed,
+               Basis& basis, std::vector<double>& values) {
+    const int m = static_cast<int>(rhs.size());
+    const int n = static_cast<int>(columns.size());
+    const long long limit = 50LL * (m + n) + 20000;
+
     double costScale = 1.0;
     for (double value : cost) costScale = std::max(costScale, std::fabs(value));
     const double dualEps = 1e-9 * costScale;
-    long long degenerate = 0;  // подряд идущие шаги с нулевым сдвигом
-    hitLimit = false;
 
-    while (true) {
-        if (++iteration > limit) {
-            hitLimit = true;
-            if (getenv("PDA_DEBUG"))
-                fprintf(stderr, "[simplex] лимит: m=%d n=%d итераций=%lld\n", t.m, t.n, iteration);
-            return true;
+    std::vector<bool> inBasis(n, false);
+    for (int row = 0; row < m; ++row) inBasis[basis.column(row)] = true;
+
+    long long degenerate = 0;
+    Phase phase;
+
+    for (long long iteration = 1; iteration <= limit; ++iteration) {
+        // Накопленная ошибка округления снимается пересборкой базиса. На больших
+        // задачах пересборка дорога (O(m³)), там ограничиваемся пересчётом значений.
+        if (iteration % 200 == 0) {
+            if (m <= 2000) basis.refactor(columns);
+            values = basis.solve(rhs);
         }
-        // Правило Блэнда включается, как только появляется серия вырожденных шагов:
-        // главная задача метода Данцига-Вульфа вырождена почти вся, и без этого
-        // симплекс буксует на месте.
-        const bool bland = getenv("PDA_BLAND") ? true : degenerate > t.m;
 
-        // Приведённые стоимости: r_j = c_j - sum_i cB_i * a[i][j].
+        const std::vector<double> y = basis.prices(cost);
+        // Три режима выбора столбца: обычный (наибольшая приведённая стоимость),
+        // нормированный при затяжной серии вырожденных шагов и правило Блэнда как
+        // крайняя мера против зацикливания.
+        const bool bland = std::getenv("PDA_BLAND") ? true : degenerate > 2 * m;
+        const bool normalized = degenerate > m / 4 + 8;
+
         int entering = -1;
-        double best = -dualEps;
-        for (int j = 0; j < t.n; ++j) {
-            if (!allowed[j]) continue;
+        double best = 0.0;
+        for (int j = 0; j < n; ++j) {
+            if (!allowed[j] || inBasis[j]) continue;
             double reduced = cost[j];
-            for (int i = 0; i < t.m; ++i) {
-                const double coeff = t.a[i][j];
-                if (coeff != 0.0) reduced -= cost[t.basis[i]] * coeff;
-            }
-            if (reduced < best) {
+            const Column& column = columns[j];
+            for (size_t k = 0; k < column.size(); ++k)
+                reduced -= y[column.rows[k]] * column.values[k];
+            if (reduced >= -dualEps) continue;
+
+            if (bland) {  // правило Блэнда: первый подходящий столбец
                 entering = j;
-                best = reduced;
-                if (bland) break;  // Блэнд: первый подходящий столбец
+                break;
+            }
+            // При вырождении приведённая стоимость нормируется длиной столбца: иначе
+            // метод предпочитает «длинные» столбцы, делает крошечные шаги и
+            // зацикливается на главной задаче декомпозиции.
+            double score = reduced;
+            if (normalized) {
+                double norm = 1.0;
+                for (size_t k = 0; k < column.size(); ++k)
+                    norm += column.values[k] * column.values[k];
+                score = reduced / std::sqrt(norm);
+            }
+            if (score < best) {
+                entering = j;
+                best = score;
             }
         }
-        if (entering < 0) return true;  // оптимум достигнут
+        if (entering < 0) {
+            phase.optimal = true;
+            if (std::getenv("PDA_TRACE"))
+                std::fprintf(stderr, "[фаза] оптимум за %lld шагов (строк %d)\n", iteration, m);
+            return phase;
+        }
 
-        // Тест отношения: какая строка первой упрётся в ноль.
-        int leaving = -1;
-        double bestRatio = std::numeric_limits<double>::infinity();
-        for (int i = 0; i < t.m; ++i) {
-            const double coeff = t.a[i][entering];
-            if (coeff <= kPivotEps) continue;
-            const double ratio = t.b[i] / coeff;
-            if (leaving < 0) {
+        const std::vector<double> d = basis.direction(columns[entering]);
+
+        int pivot = -1;
+        double bestRatio = 0.0;
+        for (int row = 0; row < m; ++row) {
+            if (d[row] <= kPivotEps) continue;
+            const double ratio = values[row] / d[row];
+            if (pivot < 0) {
+                pivot = row;
                 bestRatio = ratio;
-                leaving = i;
                 continue;
             }
-            // Допуск относительный: при больших числах абсолютный тонет в шуме округления.
-            const double tol = kEps * std::max(1.0, std::fabs(bestRatio));
+            const double tol = 1e-9 * std::max(1.0, std::fabs(bestRatio));
             if (ratio < bestRatio - tol) {
+                pivot = row;
                 bestRatio = ratio;
-                leaving = i;
-            } else if (ratio <= bestRatio + tol && t.basis[i] < t.basis[leaving]) {
+            } else if (ratio <= bestRatio + tol && basis.column(row) < basis.column(pivot)) {
+                pivot = row;
                 bestRatio = std::min(bestRatio, ratio);
-                leaving = i;  // правило Блэнда при равных отношениях
             }
         }
-        if (leaving < 0) {
-            if (getenv("PDA_DEBUG"))
-                fprintf(stderr, "[simplex] неограничено: входит столбец %d, m=%d n=%d\n",
-                        entering, t.m, t.n);
-            return false;  // неограниченная задача
+        if (pivot < 0) {
+            phase.unbounded = true;
+            return phase;
         }
 
-        degenerate = bestRatio <= kEps ? degenerate + 1 : 0;
-        t.pivot(leaving, entering);
-        if (iteration % 200 == 0) t.refactor();
+        degenerate = bestRatio <= kFeasEps ? degenerate + 1 : 0;
+        inBasis[basis.column(pivot)] = false;
+        inBasis[entering] = true;
+        basis.replace(pivot, entering, d, values);
     }
+
+    phase.limit = true;
+    if (std::getenv("PDA_TRACE"))
+        std::fprintf(stderr, "[фаза] ЛИМИТ %lld шагов (строк %d, столбцов %d)\n", limit, m, n);
+    return phase;
 }
 
 }  // namespace
@@ -164,87 +278,163 @@ LpResult solveLp(const LpProblem& problem) {
     const int numEq = static_cast<int>(problem.equalities.size());
     const int m = numUb + numEq;
 
-    // Столбцы: исходные переменные, затем слэки неравенств, затем искусственные.
-    const int slackOffset = numVars;
-    const int artificialOffset = numVars + numUb;
-    const int n = artificialOffset + m;
+    if (m == 0) {
+        for (int j = 0; j < numVars && j < static_cast<int>(problem.objective.size()); ++j)
+            if (problem.objective[j] < 0.0)
+                return {LpStatus::Unbounded, "Целевая функция не ограничена", 0.0, {}, {}};
+        return {LpStatus::Optimal, "Оптимум найден", 0.0, std::vector<double>(numVars, 0.0), {}};
+    }
 
-    Tableau t;
-    t.m = m;
-    t.n = n;
-    t.a.assign(m, std::vector<double>(n, 0.0));
-    t.b.assign(m, 0.0);
-    t.basis.assign(m, -1);
+    // Правая часть приводится к неотрицательной; знак строки запоминается для оценок.
+    std::vector<double> rhs(m, 0.0);
+    std::vector<bool> flipped(m, false);
+    for (int i = 0; i < numUb; ++i) rhs[i] = problem.inequalities[i].rhs;
+    for (int i = 0; i < numEq; ++i) rhs[numUb + i] = problem.equalities[i].rhs;
+    for (int i = 0; i < m; ++i)
+        if (rhs[i] < 0.0) {
+            rhs[i] = -rhs[i];
+            flipped[i] = true;
+        }
+
+    // Столбцы: исходные переменные, затем слэки неравенств, затем искусственные.
+    std::vector<Column> columns(numVars);
+    auto fill = [&](int row, const LpRow& source) {
+        const double sign = flipped[row] ? -1.0 : 1.0;
+        for (const auto& [var, value] : source.coeffs)
+            if (var >= 0 && var < numVars && std::fabs(value) > kZero)
+                columns[var].add(row, sign * value);
+    };
+    for (int i = 0; i < numUb; ++i) fill(i, problem.inequalities[i]);
+    for (int i = 0; i < numEq; ++i) fill(numUb + i, problem.equalities[i]);
+
+    std::vector<int> basisColumns(m, -1);
+    for (int i = 0; i < numUb; ++i) {
+        Column slack;
+        slack.add(i, flipped[i] ? -1.0 : 1.0);
+        columns.push_back(slack);
+        // Слэк с коэффициентом +1 сразу становится базисным.
+        if (!flipped[i]) basisColumns[i] = static_cast<int>(columns.size()) - 1;
+    }
+
+    const int artificialStart = static_cast<int>(columns.size());
+    for (int i = 0; i < m; ++i) {
+        if (basisColumns[i] >= 0) continue;
+        Column artificial;
+        artificial.add(i, 1.0);
+        columns.push_back(artificial);
+        basisColumns[i] = static_cast<int>(columns.size()) - 1;
+    }
+    const int n = static_cast<int>(columns.size());
 
     std::vector<bool> isArtificial(n, false);
-    int artificialCount = 0;
+    for (int j = artificialStart; j < n; ++j) isArtificial[j] = true;
 
-    // Для двойственных оценок: единичный столбец каждой строки и признак смены знака.
-    std::vector<int> identityColumn(m, -1);
-    std::vector<bool> flipped(m, false);
+    const std::vector<int> basisColumnsOriginal = basisColumns;
 
-    auto fillRow = [&](int row, const LpRow& source, int slackColumn) {
-        for (const auto& [var, coeff] : source.coeffs) t.a[row][var] = coeff;
-        t.b[row] = source.rhs;
-        if (slackColumn >= 0) t.a[row][slackColumn] = 1.0;
+    if (std::getenv("PDA_SIZES")) {
+        size_t nonzeros = 0;
+        for (const Column& column : columns) nonzeros += column.size();
+        std::fprintf(stderr, "[решатель] строк %d, столбцов %d, ненулевых %zu (%.3f %% ячеек)\n",
+                     m, n, nonzeros, 100.0 * nonzeros / (static_cast<double>(m) * n));
+    }
 
-        // Правая часть должна быть неотрицательной.
-        if (t.b[row] < 0.0) {
-            for (double& value : t.a[row]) value = -value;
-            t.b[row] = -t.b[row];
-            flipped[row] = true;
+    // Стартовый базис, подсказанный вызывающей стороной.
+    bool warmStart = false;
+    if (static_cast<int>(problem.initialBasis.size()) == m) {
+        std::vector<bool> taken(n, false);
+        std::vector<int> candidate = basisColumns;
+        bool usable = true;
+        for (int row = 0; row < m && usable; ++row) {
+            const int column = problem.initialBasis[row];
+            if (column < 0 || column >= n || taken[column]) continue;
+            taken[column] = true;
+            candidate[row] = column;
         }
-
-        // Если слэк остался с коэффициентом +1, он и становится базисом.
-        if (slackColumn >= 0 && t.a[row][slackColumn] > 0.0) {
-            t.basis[row] = slackColumn;
-            identityColumn[row] = slackColumn;
-            return;
+        if (usable) {
+            basisColumns = candidate;
+            warmStart = true;
         }
-        const int artificial = artificialOffset + artificialCount++;
-        t.a[row][artificial] = 1.0;
-        isArtificial[artificial] = true;
-        t.basis[row] = artificial;
-        identityColumn[row] = artificial;
-    };
+    }
 
-    for (int i = 0; i < numUb; ++i) fillRow(i, problem.inequalities[i], slackOffset + i);
-    for (int i = 0; i < numEq; ++i) fillRow(numUb + i, problem.equalities[i], -1);
+    Basis basis(m, basisColumns);
+    std::vector<double> values = rhs;  // единичный базис: x_B = b
 
-    t.a0 = t.a;
-    t.b0 = t.b;
+    if (warmStart) {
+        if (std::getenv("PDA_DEBUG"))
+            std::fprintf(stderr, "[решатель] предложен стартовый базис, строк %d\n", m);
+        if (basis.refactor(columns)) {
+            values = basis.solve(rhs);
+            bool feasible = true;
+            for (int row = 0; row < m; ++row) {
+                if (values[row] < -kFeasEps) feasible = false;
+                if (isArtificial[basis.column(row)] && values[row] > kFeasEps) feasible = false;
+            }
+            if (std::getenv("PDA_DEBUG"))
+                std::fprintf(stderr, "[решатель] стартовый базис %s\n",
+                             feasible ? "принят" : "отвергнут (недопустим)");
+            if (!feasible) {  // подсказка не подошла — возвращаемся к обычному старту
+                basis = Basis(m, basisColumnsOriginal);
+                values = rhs;
+                warmStart = false;
+            }
+        } else {
+            basis = Basis(m, basisColumnsOriginal);
+            values = rhs;
+            warmStart = false;
+        }
+    }
 
     // ---- Фаза 1: минимизируем сумму искусственных переменных ----
     std::vector<bool> allowed(n, true);
     bool hitLimit = false;
 
-    if (artificialCount > 0) {
-        std::vector<double> phase1Cost(n, 0.0);
-        for (int j = 0; j < n; ++j)
-            if (isArtificial[j]) phase1Cost[j] = 1.0;
+    // Фаза 1 выполняется всегда: с подсказанного базиса она завершается сразу,
+    // но именно в ней искусственные переменные выводятся из базиса.
+    if (artificialStart < n) {
+        std::vector<double> phase1(n, 0.0);
+        for (int j = artificialStart; j < n; ++j) phase1[j] = 1.0;
 
-        if (!runPhase(t, phase1Cost, allowed, hitLimit)) {
-            return {LpStatus::Unbounded, "Фаза 1 неограничена (некорректная модель)", 0.0, {}, {}};
+        // С допустимого стартового базиса цель первой фазы уже равна нулю, искать
+        // нечего: сразу переходим к выводу искусственных переменных из базиса.
+        if (!warmStart) {
+            const Phase result = runPhase(columns, rhs, phase1, allowed, basis, values);
+            if (result.unbounded)
+                return {LpStatus::Unbounded, "Фаза 1 неограничена (некорректная модель)",
+                        0.0, {}, {}};
+            hitLimit = hitLimit || result.limit;
         }
 
         double residual = 0.0;
-        for (int i = 0; i < m; ++i)
-            if (isArtificial[t.basis[i]]) residual += t.b[i];
+        for (int row = 0; row < m; ++row)
+            if (isArtificial[basis.column(row)]) residual += std::max(0.0, values[row]);
         if (residual > 1e-6) {
+            if (std::getenv("PDA_DEBUG"))
+                std::fprintf(stderr,
+                             "[решатель] несовместность: невязка фазы 1 %.6g, строк %d, "
+                             "столбцов %d, лимит итераций %s\n",
+                             residual, m, n, warmStart ? "старт был тёплым" : "возможен");
             return {LpStatus::Infeasible, "Ограничения несовместны", 0.0, {}, {}};
         }
 
-        // Выводим искусственные переменные из базиса, где это возможно.
-        for (int i = 0; i < m; ++i) {
-            if (!isArtificial[t.basis[i]]) continue;
-            for (int j = 0; j < artificialOffset; ++j) {
-                if (std::fabs(t.a[i][j]) > kPivotEps) {
-                    t.pivot(i, j);
-                    break;
-                }
+        // Искусственные переменные выводятся из базиса: иначе во второй фазе они
+        // снова получают ненулевые значения, и равенства перестают выполняться.
+        std::vector<bool> inBasis(n, false);
+        for (int row = 0; row < m; ++row) inBasis[basis.column(row)] = true;
+
+        for (int row = 0; row < m; ++row) {
+            if (!isArtificial[basis.column(row)]) continue;
+            for (int j = 0; j < artificialStart; ++j) {
+                if (inBasis[j]) continue;
+                const std::vector<double> d = basis.direction(columns[j]);
+                if (std::fabs(d[row]) <= kPivotEps) continue;
+                inBasis[basis.column(row)] = false;
+                inBasis[j] = true;
+                basis.replace(row, j, d, values);
+                break;
             }
         }
-        for (int j = artificialOffset; j < n; ++j) allowed[j] = false;
+
+        for (int j = artificialStart; j < n; ++j) allowed[j] = false;
     }
 
     // ---- Фаза 2: исходная целевая функция ----
@@ -252,36 +442,29 @@ LpResult solveLp(const LpProblem& problem) {
     for (int j = 0; j < numVars && j < static_cast<int>(problem.objective.size()); ++j)
         cost[j] = problem.objective[j];
 
-    if (!runPhase(t, cost, allowed, hitLimit)) {
+    const Phase result = runPhase(columns, rhs, cost, allowed, basis, values);
+    if (result.unbounded)
         return {LpStatus::Unbounded, "Целевая функция не ограничена", 0.0, {}, {}};
-    }
+    hitLimit = hitLimit || result.limit;
 
     std::vector<double> x(numVars, 0.0);
-    for (int i = 0; i < m; ++i) {
-        const int column = t.basis[i];
-        if (column >= 0 && column < numVars) x[column] = t.b[i];
+    for (int row = 0; row < m; ++row) {
+        const int column = basis.column(row);
+        if (column < numVars) x[column] = values[row];
     }
+    for (double& value : x)
+        if (value < 0.0 && value > -kFeasEps) value = 0.0;
 
     double objective = 0.0;
     for (int j = 0; j < numVars; ++j) objective += cost[j] * x[j];
 
-    // Двойственная оценка строки i: y_i = -r_j, где j — единичный столбец этой строки,
-    // r_j — его приведённая стоимость при целевой функции второй фазы.
-    std::vector<double> duals(m, 0.0);
-    for (int i = 0; i < m; ++i) {
-        const int column = identityColumn[i];
-        if (column < 0) continue;
-        double reduced = cost[column];
-        for (int row = 0; row < m; ++row) {
-            const double coeff = t.a[row][column];
-            if (coeff != 0.0) reduced -= cost[t.basis[row]] * coeff;
-        }
-        duals[i] = flipped[i] ? reduced : -reduced;
-    }
+    // Двойственные оценки строк; для перевёрнутых строк знак возвращается обратно.
+    std::vector<double> duals = basis.prices(cost);
+    for (int i = 0; i < m; ++i)
+        if (flipped[i]) duals[i] = -duals[i];
 
-    if (hitLimit) {
+    if (hitLimit)
         return {LpStatus::IterationLimit, "Достигнут лимит итераций", objective, x, duals};
-    }
     return {LpStatus::Optimal, "Оптимум найден", objective, x, duals};
 }
 
