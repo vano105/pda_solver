@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<XMLDocument version="1.0">
+  <task>
+    <flows>
+      <type id="1"/>
+      <type id="2"/>
+      <type id="3"/>
+    </flows>
+    <process>
+      <type id="1" time="1">
+        <input>
+          <type id="1" size="1"/>
+        </input>
+        <output>
+          <type id="2" size="1"/>
+        </output>
+      </type>
+      <type id="2" time="1">
+        <input>
+          <type id="2" size="1"/>
+        </input>
+        <output>
+          <type id="3" size="1"/>
+        </output>
+      </type>
+    </process>
+    <transport>
+      <type id="1" time="1">
+        <input>
+          <type id="2" size="1"/>
+        </input>
+        <output>
+          <type id="2" size="1"/>
+        </output>
+      </type>
+    </transport>
+    <storage>
+      <type id="1">
+        <input>
+          <type id="1"/>
+          <type id="2"/>
+          <type id="3"/>
+        </input>
+      </type>
+    </storage>
+    <struct id="1" time="10" start_time="0" end_time="10">
+      <elem id="1" process_1="" storage_1="20" input_1="15" send_capacity="*"/>
+      <elem id="2" process_2="" storage_1="*" receive_capacity="*"/>
+      <link id1="1" id2="2" direction="forward" transport_1=""/>
+    </struct>
+    <struct id="2" time="10" start_time="10" end_time="20">
+      <elem id="1" process_1="" storage_1="20"/>
+      <elem id="2" process_2="" storage_1="20" output_3=""/>
+      <link id1="1" id2="2" direction="both" transport_1=""/>
+    </struct>
+    <selectors>
+      <selector id="1" sign="1.0">
+        <resultflow flow="3" interval="*" object="*" sign="1.0"/>
+      </selector>
+      <selector id="2" sign="-0.5">
+        <lost flow="*" interval="*" object="*" sign="1.0"/>
+      </selector>
+      <selector id="3" sign="1.0">
+        <time interval="*" sign="1.0"/>
+      </selector>
+    </selectors>
+    <criterion sign="MAX">
+      <selector id="1"/>
+      <selector id="2"/>
+    </criterion>
+    <constraints>
+      <constraint id="1" sign="less" value="100">
+        <selector id="3" sign="1.0"/>
+      </constraint>
+    </constraints>
+  </task>
+</XMLDocument>

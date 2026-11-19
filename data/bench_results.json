@@ -1,0 +1,112 @@
+[
+  {
+    "id": "medium",
+    "method": "MIP",
+    "status": "ok",
+    "objective": 15.0,
+    "seconds": 0.10075240000151098,
+    "n_intervals": 2,
+    "n_objects": 2,
+    "n_vars": 57,
+    "n_cons": 53
+  },
+  {
+    "id": "mini",
+    "method": "MIP",
+    "status": "ok",
+    "objective": 10.0,
+    "seconds": 0.11094820000107575,
+    "n_intervals": 1,
+    "n_objects": 1,
+    "n_vars": 11,
+    "n_cons": 9
+  },
+  {
+    "id": "pc10-15",
+    "method": "MIP",
+    "status": "ok",
+    "objective": 305200.0,
+    "seconds": 2.1942241999986436,
+    "n_intervals": 15,
+    "n_objects": 12,
+    "n_vars": 6971,
+    "n_cons": 6138
+  },
+  {
+    "id": "pc10-3",
+    "method": "MIP",
+    "status": "ok",
+    "objective": 111000.0,
+    "seconds": 0.18936829999984184,
+    "n_intervals": 3,
+    "n_objects": 12,
+    "n_vars": 1327,
+    "n_cons": 1170
+  },
+  {
+    "id": "pc10-30",
+    "method": "MIP",
+    "status": "ok",
+    "objective": 889390.0000000005,
+    "seconds": 7.083557800000563,
+    "n_intervals": 30,
+    "n_objects": 12,
+    "n_vars": 12808,
+    "n_cons": 11304
+  },
+  {
+    "id": "pc10-60",
+    "method": "MIP",
+    "status": "ok",
+    "objective": 1351570.0000000005,
+    "seconds": 17.907828600000357,
+    "n_intervals": 60,
+    "n_objects": 12,
+    "n_vars": 20240,
+    "n_cons": 18000
+  },
+  {
+    "id": "pc10-8",
+    "method": "MIP",
+    "status": "ok",
+    "objective": 175400.0,
+    "seconds": 0.6995334000002913,
+    "n_intervals": 8,
+    "n_objects": 12,
+    "n_vars": 3688,
+    "n_cons": 3248
+  },
+  {
+    "id": "pc20-10",
+    "method": "MIP",
+    "status": "ok",
+    "objective": 286200.0,
+    "seconds": 3.464453799999319,
+    "n_intervals": 10,
+    "n_objects": 22,
+    "n_vars": 8884,
+    "n_cons": 7852
+  },
+  {
+    "id": "pc30-10",
+    "method": "MIP",
+    "status": "ok",
+    "objective": 392700.0,
+    "seconds": 11.0701138000004,
+    "n_intervals": 10,
+    "n_objects": 34,
+    "n_vars": 17056,
+    "n_cons": 15008
+  },
+  {
+    "id": "request",
+    "method": "MIP",
+    "status": "ok",
+    "objective": 720.0000000000001,
+    "seconds": 0.10759499999949185,
+    "n_intervals": 3,
+    "n_objects": 5,
+    "n_vars": 343,
+    "n_cons": 304
+  }
+]
